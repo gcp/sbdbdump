@@ -149,12 +149,12 @@ def read_sbstore(sbstorefile):
     subprefixes = read_bytesliced(fp, num_sub_prefix)
 
     # Construct the prefix objects
-    for x in range(num_add_prefix):
-        prefix = SBHash(0, addprefix_addchunk[x])
+    for i in range(num_add_prefix):
+        prefix = SBHash(0, addprefix_addchunk[i])
         data.addprefixes.append(prefix)
-    for x in range(num_sub_prefix):
-        prefix = SBHash(subprefixes[x], subprefix_addchunk[x],
-                        subprefix_subchunk[x])
+    for i in range(num_sub_prefix):
+        prefix = SBHash(subprefixes[i], subprefix_addchunk[i],
+                        subprefix_subchunk[i])
         data.subprefixes.append(prefix)
     for x in range(num_add_complete):
         complete = read_raw(fp, 32)
