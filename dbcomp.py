@@ -5,6 +5,7 @@ import sys
 import os
 import zlib
 import binascii
+import operator
 import sqlite3
 from struct import Struct
 
@@ -65,16 +66,30 @@ class SBHash:
 class SBData:
     def __init__(self):
         # XXX: are sets usable for these 2?
-        self.addchunks = []
-        self.subchunks = []
+        self.addchunks = set()
+        self.subchunks = set()
         self.addprefixes = []
         self.subprefixes = []
         self.addcompletes = []
         self.subcompletes = []
     def addchunk(self, chunk):
-        self.addchunks.append(chunk)
+        self.addchunks.add(chunk)
     def subchunk(self, chunk):
-        self.subchunks.append(chunk)
+        self.subchunks.add(chunk)
+    def fill_addprefixes(self, prefixes):
+        """Add prefixes are stored in the PrefixSet instead of in the sbstore,
+        so allow filling them in seperately afterwards."""
+        for i, pref in enumerate(self.addprefixes):
+            pref.prefix = prefixes[i]
+    def sort_all_data(self):
+        self.addprefixes.sort(
+            key=operator.attrgetter('prefix', 'addchunk'))
+        self.subprefixes.sort(
+            key=operator.attrgetter('prefix', 'subchunk', 'addchunk'))
+        self.addcompletes.sort(
+            key=operator.attrgetter('prefix', 'addchunk'))
+        self.subcompletes.sort(
+            key=operator.attrgetter('prefix', 'subchunk', 'addchunk'))
 
 def read_unzip(fp, comp_size):
     """Read comp_size bytes from a zlib stream and
@@ -186,6 +201,7 @@ def read_sbstore(sbstorefile):
         endpos = fp.tell()
         print("%d bytes remaining" % (endpos - ourpos))
         exit(1)
+    return data
 
 def pset_to_prefixes(index_prefixes, index_starts, index_deltas):
     prefixes = []
@@ -233,6 +249,8 @@ def parse_new_databases(dir):
             print("Reading " + sb_name)
             sb_data = read_sbstore(sb_file)
             prefixes = read_pset(os.path.join(dir, sb_name + ".pset"))
+            sb_data.fill_addprefixes(prefixes)
+            sb_data.sort_all_data()
             sb_lists.append((sb_name, sb_file, sb_data))
             print("\n")
     print("Found safebrowsing lists:")
