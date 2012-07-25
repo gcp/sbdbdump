@@ -7,7 +7,7 @@ import zlib
 import binascii
 import operator
 import sqlite3
-from struct import Struct
+import struct
 
 # File format of .sbstore files:
 #
@@ -96,22 +96,22 @@ def read_unzip(fp, comp_size):
      return as a tuple of bytes"""
     zlib_data = fp.read(comp_size)
     uncomp_data = zlib.decompress(zlib_data)
-    bytebuffer = Struct("=" + str(len(uncomp_data)) + "B")
+    bytebuffer = struct.Struct("=" + str(len(uncomp_data)) + "B")
     data = bytebuffer.unpack_from(uncomp_data, 0)
     return data
 
 def read_raw(fp, size):
     """Read raw bytes from a stream and return as a tuple of bytes"""
-    bytebuffer = Struct("=" + str(size) + "B")
+    bytebuffer = struct.Struct("=" + str(size) + "B")
     data = bytebuffer.unpack_from(fp.read(size), 0)
     return data
 
 def readuint32(fp):
-    uint32 = Struct("=I")
+    uint32 = struct.Struct("=I")
     return uint32.unpack_from(fp.read(uint32.size), 0)[0]
 
 def readuint16(fp):
-    uint16 = Struct("=H")
+    uint16 = struct.Struct("=H")
     return uint16.unpack_from(fp.read(uint16.size), 0)[0]
 
 def read_bytesliced(fp, count):
@@ -142,7 +142,7 @@ def read_sbstore(sbstorefile):
     fp = open(sbstorefile, "rb")
 
     # parse header
-    header = Struct("=IIIIIIII")
+    header = struct.Struct("=IIIIIIII")
     magic, version, num_add_chunk, num_sub_chunk, \
     num_add_prefix, num_sub_prefix, \
     num_add_complete, num_sub_complete = header.unpack_from(fp.read(header.size), 0)
@@ -289,7 +289,9 @@ def parse_old_database(dir):
             if not row: break
             domain, prefix, addchunk = row[0], row[1], row[2]
             if not prefix:
-                prefix = domain
+                prefix = struct.unpack("=I", domain)[0]
+            else:
+                prefix = struct.unpack("=I", prefix)[0]
             pref_data = SBHash(prefix, addchunk)
             data.addprefixes.append(pref_data)
             data.add_addchunk(addchunk)
@@ -306,7 +308,9 @@ def parse_old_database(dir):
             domain, prefix, subchunk, addchunk = \
                 row[0], row[1], row[2], row[3]
             if not prefix:
-                prefix = domain
+                prefix = struct.unpack("=I", domain)[0]
+            else:
+                prefix = struct.unpack("=I", prefix)[0]
             pref_data = SBHash(prefix, addchunk, subchunk)
             data.subprefixes.append(pref_data)
             data.add_subchunk(subchunk)
@@ -318,18 +322,35 @@ def parse_old_database(dir):
               "SubPrefixes: %d" % (table_name, len(data.addchunks),
                                    len(data.subchunks), len(data.addprefixes),
                                    len(data.subprefixes)))
+        data.sort_all_data()
         sb_names[table_name] = data
     connection.close()
+    return sb_names
 
-def compare_all_the_things(new_data, old_data):
-    pass
+def compare_table(old_table, new_table):
+    # Compare AddPrefixes
+    for i, pref in enumerate(old_table.addprefixes):
+        oldpref = pref.prefix
+        newpref = new_table.addprefixes[i].prefix
+        if oldpref != newpref:
+            print("No match old %X != new %X" % (oldpref, newpref))
+            exit(1)
+        else:
+            print(".", sep="", end="")
+
+def compare_all_the_things(new_lists, old_lists):
+    for table in old_lists:
+        print("\nComparing table " + table)
+        old_data = old_lists[table]
+        new_data = new_lists[table]
+        compare_table(old_data, new_data)
 
 def main(argv):
     new_profile_dir = argv.pop()
     old_profile_dir = argv.pop()
-    new_data = parse_new_databases(new_profile_dir)
-    old_data = parse_old_database(old_profile_dir)
-    compare_all_the_things(new_data, old_data)
+    new_lists = parse_new_databases(new_profile_dir)
+    old_lists = parse_old_database(old_profile_dir)
+    compare_all_the_things(new_lists, old_lists)
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
