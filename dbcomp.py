@@ -4,11 +4,12 @@ from __future__ import print_function
 import sys
 import os
 import zlib
+import binascii
 import sqlite3
 from struct import Struct
 
-uint32 = Struct("=I")
-
+# File format of .sbstore files:
+#
 # We do not store the add prefixes, those are retrieved by
 # decompressing the PrefixSet cache whenever we need to apply
 # an update.
@@ -51,32 +52,33 @@ uint32 = Struct("=I")
 #    byte sliced (numSubPrefixes)   uint32 sub chunk of SubPrefixes
 #    byte sliced (numSubPrefixes)   uint32 add chunk of SubPrefixes
 #    byte sliced (numSubPrefixes)   uint32 SubPrefixes
-#    0...numAddCompletes           32-byte Completions
-#    0...numSubCompletes           32-byte Completions
+#    0...numAddCompletes            32-byte Completions
+#    0...numSubCompletes            32-byte Completions
 #    16-byte MD5 of all preceding data
 
 class SBHash:
-    def __init__(self):
-        self.addchunk = None
-        self.subchunk = None
-        self.prefix = None
-    def __init__(self, prefix, addc, delc=None):
+    def __init__(self, prefix=None, addc=None, delc=None):
         self.prefix = prefix
         self.addchunk = addc
         self.subchunk = delc
 
 class SBData:
     def __init__(self):
+        # XXX: are sets usable for these 2?
         self.addchunks = []
         self.subchunks = []
         self.addprefixes = []
         self.subprefixes = []
+        self.addcompletes = []
+        self.subcompletes = []
     def addchunk(self, chunk):
         self.addchunks.append(chunk)
     def subchunk(self, chunk):
         self.subchunks.append(chunk)
 
 def read_unzip(fp, comp_size):
+    """Read comp_size bytes from a zlib stream and
+     return as a tuple of bytes"""
     zlib_data = fp.read(comp_size)
     uncomp_data = zlib.decompress(zlib_data)
     bytebuffer = Struct("=" + str(len(uncomp_data)) + "B")
@@ -84,23 +86,34 @@ def read_unzip(fp, comp_size):
     return data
 
 def read_raw(fp, size):
+    """Read raw bytes from a stream and return as a tuple of bytes"""
     bytebuffer = Struct("=" + str(size) + "B")
     data = bytebuffer.unpack_from(fp.read(size), 0)
     return data
 
+def readuint32(fp):
+    uint32 = Struct("=I")
+    return uint32.unpack_from(fp.read(uint32.size), 0)[0]
+
 def read_bytesliced(fp, count):
-    comp_size = uint32.unpack_from(fp.read(uint32.size), 0)[0]
-    print("Compressed data size %d" % comp_size)
+    comp_size = readuint32(fp)
+    #print("Compressed data size %d" % comp_size)
     slice1 = read_unzip(fp, comp_size)
-    comp_size = uint32.unpack_from(fp.read(uint32.size), 0)[0]
-    print("Compressed data size %d" % comp_size)
+    comp_size = readuint32(fp)
+    #print("Compressed data size %d" % comp_size)
     slice2 = read_unzip(fp, comp_size)
-    comp_size = uint32.unpack_from(fp.read(uint32.size), 0)[0]
-    print("Compressed data size %d" % comp_size)
+    comp_size = readuint32(fp)
+    #print("Compressed data size %d" % comp_size)
     slice3 = read_unzip(fp, comp_size)
     slice4 = read_raw(fp, count)
-    print("%d %d %d %d" % (len(slice1), len(slice2),
-                           len(slice3), len(slice4)))
+
+    if (len(slice1) != len(slice2)) or \
+       (len(slice2) != len(slice3)) or \
+       (len(slice3) != len(slice4)):
+        print("Slices inconsistent %d %d %d %d" % (len(slice1), len(slice2),
+                                                   len(slice3), len(slice4)))
+        exit(1)
+
     result = []
     for i in range(count):
         val = (slice1[i] << 24) | (slice2[i] << 16) \
@@ -111,27 +124,60 @@ def read_bytesliced(fp, count):
 def read_sbstore(sbstorefile):
     data = SBData()
     fp = open(sbstorefile, "rb")
+
+    # parse header
     header = Struct("=IIIIIIII")
     magic, version, num_add_chunk, num_sub_chunk, \
     num_add_prefix, num_sub_prefix, \
     num_add_complete, num_sub_complete = header.unpack_from(fp.read(header.size), 0)
-    print(("Magic %u Version %u NumAddChunk: %d NumSubChunk: %d "
+    print(("Magic %X Version %u NumAddChunk: %d NumSubChunk: %d "
            + "NumAddPrefix: %d NumSubPrefix: %d NumAddComplete: %d "
            + "NumSubComplete: %d") % (magic, version, num_add_chunk,
                                       num_sub_chunk, num_add_prefix,
                                       num_sub_prefix, num_add_complete,
                                       num_sub_complete))
+
+    # parse chunk data
     for x in range(num_add_chunk):
-        chunk = uint32.unpack_from(fp.read(uint32.size), 0)[0]
+        chunk = readuint32(fp)
         data.addchunk(chunk)
     for x in range(num_sub_chunk):
-        chunk = uint32.unpack_from(fp.read(uint32.size), 0)[0]
+        chunk = readuint32(fp)
         data.subchunk(chunk)
+
+    # read bytesliced data
     addprefix_addchunk = read_bytesliced(fp, num_add_prefix)
     subprefix_subchunk = read_bytesliced(fp, num_sub_prefix)
     subprefix_addchunk = read_bytesliced(fp, num_sub_prefix)
     subprefixes = read_bytesliced(fp, num_sub_prefix)
-    # Read completes and MD5 here
+
+    # Construct the prefix objects
+    for x in range(num_add_prefix):
+        prefix = SBHash(0, addprefix_addchunk[x])
+        data.addprefixes.append(prefix)
+    for x in range(num_sub_prefix):
+        prefix = SBHash(subprefixes[x], subprefix_addchunk[x],
+                        subprefix_subchunk[x])
+        data.subprefixes.append(prefix)
+    for x in range(num_add_complete):
+        complete = read_raw(fp, 32)
+        data.addcompletes.append(complete)
+    for x in range(num_sub_complete):
+        complete = read_raw(fp, 32)
+        data.subcompletes.append(complete)
+    md5sum = fp.read(16)
+    print("MD5: " + binascii.b2a_hex(md5sum))
+    # EOF detection
+    dummy = fp.read(1)
+    if len(dummy):
+        print("File doesn't end where expected:", end=" ")
+        # Don't count the dummy read, we finished before it
+        ourpos = fp.tell() - len(dummy)
+        # Seek to end
+        fp.seek(0, 2)
+        endpos = fp.tell()
+        print("%d bytes remaining" % (endpos - ourpos))
+        exit(1)
 
 def parse_new_databases(dir):
     # look for all sbstore files
