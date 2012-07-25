@@ -72,9 +72,9 @@ class SBData:
         self.subprefixes = []
         self.addcompletes = []
         self.subcompletes = []
-    def addchunk(self, chunk):
+    def add_addchunk(self, chunk):
         self.addchunks.add(chunk)
-    def subchunk(self, chunk):
+    def add_subchunk(self, chunk):
         self.subchunks.add(chunk)
     def fill_addprefixes(self, prefixes):
         """Add prefixes are stored in the PrefixSet instead of in the sbstore,
@@ -156,10 +156,10 @@ def read_sbstore(sbstorefile):
     # parse chunk data
     for x in range(num_add_chunk):
         chunk = readuint32(fp)
-        data.addchunk(chunk)
+        data.add_addchunk(chunk)
     for x in range(num_sub_chunk):
         chunk = readuint32(fp)
-        data.subchunk(chunk)
+        data.add_subchunk(chunk)
 
     # read bytesliced data
     addprefix_addchunk = read_bytesliced(fp, num_add_prefix)
@@ -241,7 +241,7 @@ def read_pset(filename):
 
 def parse_new_databases(dir):
     # look for all sbstore files
-    sb_lists = []
+    sb_lists = {}
     for file in os.listdir(dir):
         if file.endswith(".sbstore"):
             sb_file = os.path.join(dir, file)
@@ -251,16 +251,85 @@ def parse_new_databases(dir):
             prefixes = read_pset(os.path.join(dir, sb_name + ".pset"))
             sb_data.fill_addprefixes(prefixes)
             sb_data.sort_all_data()
-            sb_lists.append((sb_name, sb_file, sb_data))
+            sb_lists[sb_name] = sb_data
             print("\n")
-    print("Found safebrowsing lists:")
-    for name, file, data in sb_lists:
+    print("Found safebrowsing lists in new DB:")
+    for name in sb_lists.keys():
         print(name)
+    return sb_lists
+
+def parse_old_database(dir):
+    filename = os.path.join(dir, "urlclassifier3.sqlite")
+    connection = sqlite3.connect(filename)
+    cursor = connection.cursor()
+    tables_query = "SELECT name, id FROM moz_tables"
+    cursor.execute(tables_query)
+    sb_names = {}
+    while True:
+        row = cursor.fetchone()
+        if not row: break
+        name, id = row[0], row[1]
+        sb_names[name] = id
+    cursor.close()
+    print("\nFound safebrowsing lists in old DB:")
+    for key in sb_names.keys():
+        print(key)
+    sb_lists = {}
+    for table_name in sb_names.keys():
+        table_id = sb_names[table_name]
+        data = SBData()
+
+        # Gather add prefixes
+        addpref_query = ("SELECT domain, partial_data, chunk_id "
+                         "FROM moz_classifier WHERE table_id = ?")
+        cursor = connection.cursor()
+        cursor.execute(addpref_query, (table_id,))
+        while True:
+            row = cursor.fetchone()
+            if not row: break
+            domain, prefix, addchunk = row[0], row[1], row[2]
+            if not prefix:
+                prefix = domain
+            pref_data = SBHash(prefix, addchunk)
+            data.addprefixes.append(pref_data)
+            data.add_addchunk(addchunk)
+        cursor.close()
+
+        # Gather sub prefixes
+        subpref_query = ("SELECT domain, partial_data, chunk_id, "
+                         "add_chunk_id FROM moz_subs WHERE table_id = ?")
+        cursor = connection.cursor()
+        cursor.execute(subpref_query, (table_id,))
+        while True:
+            row = cursor.fetchone()
+            if not row: break
+            domain, prefix, subchunk, addchunk = \
+                row[0], row[1], row[2], row[3]
+            if not prefix:
+                prefix = domain
+            pref_data = SBHash(prefix, addchunk, subchunk)
+            data.subprefixes.append(pref_data)
+            data.add_subchunk(subchunk)
+        cursor.close()
+        # Note that chunk count reported here is the real chunks we have
+        # data for. In reality we expect less chunks to exist in the prefix
+        # data due to knocking them out.
+        print("\nTable: %s\nAddChunks: %d SubChunks: %d AddPrefixes: %d " \
+              "SubPrefixes: %d" % (table_name, len(data.addchunks),
+                                   len(data.subchunks), len(data.addprefixes),
+                                   len(data.subprefixes)))
+        sb_names[table_name] = data
+    connection.close()
+
+def compare_all_the_things(new_data, old_data):
+    pass
 
 def main(argv):
     new_profile_dir = argv.pop()
     old_profile_dir = argv.pop()
     new_data = parse_new_databases(new_profile_dir)
+    old_data = parse_old_database(old_profile_dir)
+    compare_all_the_things(new_data, old_data)
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
