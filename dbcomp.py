@@ -95,6 +95,10 @@ def readuint32(fp):
     uint32 = Struct("=I")
     return uint32.unpack_from(fp.read(uint32.size), 0)[0]
 
+def readuint16(fp):
+    uint16 = Struct("=H")
+    return uint16.unpack_from(fp.read(uint16.size), 0)[0]
+
 def read_bytesliced(fp, count):
     comp_size = readuint32(fp)
     slice1 = read_unzip(fp, comp_size)
@@ -183,6 +187,42 @@ def read_sbstore(sbstorefile):
         print("%d bytes remaining" % (endpos - ourpos))
         exit(1)
 
+def pset_to_prefixes(index_prefixes, index_starts, index_deltas):
+    prefixes = []
+    prefix_len = len(index_prefixes)
+    for i in range(prefix_len):
+        prefix = index_prefixes[i]
+        prefixes.append(prefix)
+        start = index_starts[i]
+        if i != (prefix_len - 1):
+            end = index_starts[i + 1]
+        else:
+            end = len(index_deltas)
+        #print("s: %d e: %d" % (start, end))
+        for j in range(start, end):
+            #print("%d " % index_deltas[j])
+            prefix += index_deltas[j]
+            prefixes.append(prefix)
+    return prefixes
+
+def read_pset(filename):
+    fp = open(filename, "rb")
+    version = readuint32(fp)
+    indexsize = readuint32(fp)
+    deltasize = readuint32(fp)
+    print("Version: %X Indexes: %d Deltas: %d" % (version, indexsize, deltasize))
+    index_prefixes = []
+    index_starts = []
+    index_deltas = []
+    for x in range(indexsize):
+        index_prefixes.append(readuint32(fp))
+    for x in range(indexsize):
+        index_starts.append(readuint32(fp))
+    for x in range(deltasize):
+        index_deltas.append(readuint16(fp))
+    prefixes = pset_to_prefixes(index_prefixes, index_starts, index_deltas)
+    return prefixes
+
 def parse_new_databases(dir):
     # look for all sbstore files
     sb_lists = []
@@ -192,6 +232,7 @@ def parse_new_databases(dir):
             sb_name = file[:-len(".sbstore")]
             print("Reading " + sb_name)
             sb_data = read_sbstore(sb_file)
+            prefixes = read_pset(os.path.join(dir, sb_name + ".pset"))
             sb_lists.append((sb_name, sb_file, sb_data))
             print("\n")
     print("Found safebrowsing lists:")
