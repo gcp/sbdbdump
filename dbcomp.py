@@ -97,13 +97,10 @@ def readuint32(fp):
 
 def read_bytesliced(fp, count):
     comp_size = readuint32(fp)
-    #print("Compressed data size %d" % comp_size)
     slice1 = read_unzip(fp, comp_size)
     comp_size = readuint32(fp)
-    #print("Compressed data size %d" % comp_size)
     slice2 = read_unzip(fp, comp_size)
     comp_size = readuint32(fp)
-    #print("Compressed data size %d" % comp_size)
     slice3 = read_unzip(fp, comp_size)
     slice4 = read_raw(fp, count)
 
@@ -161,15 +158,22 @@ def read_sbstore(sbstorefile):
         data.subprefixes.append(prefix)
     for x in range(num_add_complete):
         complete = read_raw(fp, 32)
-        data.addcompletes.append(complete)
+        addchunk = readuint32(fp)
+        entry = SBHash(complete, addchunk)
+        data.addcompletes.append(entry)
     for x in range(num_sub_complete):
         complete = read_raw(fp, 32)
-        data.subcompletes.append(complete)
+        addchunk = readuint32(fp)
+        subchunk = readuint32(fp)
+        entry = SBHash(complete, addchunk, subchunk)
+        data.subcompletes.append(entry)
     md5sum = fp.read(16)
     print("MD5: " + binascii.b2a_hex(md5sum))
     # EOF detection
     dummy = fp.read(1)
-    if len(dummy):
+    if len(dummy) or (len(md5sum) != 16):
+        if len(md5sum) != 16:
+            print("Checksum truncated")
         print("File doesn't end where expected:", end=" ")
         # Don't count the dummy read, we finished before it
         ourpos = fp.tell() - len(dummy)
