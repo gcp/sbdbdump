@@ -50,18 +50,31 @@ import struct
 #    0...numAddChunks               uint32 addChunk
 #    0...numSubChunks               uint32 subChunk
 #    byte sliced (numAddPrefixes)   uint32 add chunk of AddPrefixes
-#    byte sliced (numSubPrefixes)   uint32 sub chunk of SubPrefixes
 #    byte sliced (numSubPrefixes)   uint32 add chunk of SubPrefixes
+#    byte sliced (numSubPrefixes)   uint32 sub chunk of SubPrefixes
 #    byte sliced (numSubPrefixes)   uint32 SubPrefixes
 #    0...numAddCompletes            32-byte Completions
 #    0...numSubCompletes            32-byte Completions
 #    16-byte MD5 of all preceding data
 
 class SBHash:
-    def __init__(self, prefix=None, addc=None, delc=None):
+    def __init__(self, prefix=None, addc=None, subc=None):
         self.prefix = prefix
         self.addchunk = addc
-        self.subchunk = delc
+        self.subchunk = subc
+    def __str__(self):
+        if self.subchunk:
+            result = "Prefix %X AddChunk: %d SubChunk: %d" \
+                      % (self.prefix, self.addchunk, self.subchunk)
+        else:
+            result = "Prefix %X AddChunk: %d" % (self.prefix, self.addchunk)
+        return result
+    def __key(self):
+        return self.prefix, self.addchunk, self.subchunk
+    def __eq__(self, other):
+        return self.__key() == other.__key()
+    def __hash__(self):
+        return hash(self.__key())
 
 class SBData:
     def __init__(self):
@@ -128,9 +141,10 @@ def read_bytesliced(fp, count):
 
     if (len(slice1) != len(slice2)) or \
        (len(slice2) != len(slice3)) or \
-       (len(slice3) != len(slice4)):
-        print("Slices inconsistent %d %d %d %d" % (len(slice1), len(slice2),
-                                                   len(slice3), len(slice4)))
+       (len(slice3) != len(slice4)) or \
+       (count       != len(slice1)):
+        print("Slices inconsistent %d %d %d %d %d"
+            % (count, len(slice1), len(slice2), len(slice3), len(slice4)))
         exit(1)
 
     result = []
@@ -166,16 +180,17 @@ def read_sbstore(sbstorefile):
 
     # read bytesliced data
     addprefix_addchunk = read_bytesliced(fp, num_add_prefix)
-    subprefix_subchunk = read_bytesliced(fp, num_sub_prefix)
     subprefix_addchunk = read_bytesliced(fp, num_sub_prefix)
-    subprefixes = read_bytesliced(fp, num_sub_prefix)
+    subprefix_subchunk = read_bytesliced(fp, num_sub_prefix)
+    subprefixes        = read_bytesliced(fp, num_sub_prefix)
 
     # Construct the prefix objects
     for i in range(num_add_prefix):
         prefix = SBHash(0, addprefix_addchunk[i])
         data.addprefixes.append(prefix)
     for i in range(num_sub_prefix):
-        prefix = SBHash(subprefixes[i], subprefix_addchunk[i],
+        prefix = SBHash(subprefixes[i],
+                        subprefix_addchunk[i],
                         subprefix_subchunk[i])
         data.subprefixes.append(prefix)
     for x in range(num_add_complete):
@@ -336,7 +351,7 @@ def parse_old_database(dir):
     return sb_names
 
 def compare_table(old_table, new_table):
-    verbose = False
+    verbose = True
 
     total_prefixes = 0
     failed_prefixes = 0
@@ -351,16 +366,18 @@ def compare_table(old_table, new_table):
         new_addprefixes.add(pref)
 
     total_prefixes += len(old_addprefixes)
-    symm_intersec = old_addprefixes ^ new_addprefixes
+    symm_intersec = list(old_addprefixes ^ new_addprefixes)
+    symm_intersec.sort(key=operator.attrgetter('prefix', 'addchunk'))
+
     failed_prefixes += len(symm_intersec)
     print("%d add mismatches" % len(symm_intersec))
 
     if verbose:
         for pref in symm_intersec:
             if pref in new_addprefixes:
-                print("No match AddPrefix new %X" % pref.prefix)
+                print("No match AddPrefix new " + str(pref))
             elif pref in old_addprefixes:
-                print("No match AddPrefix old %X" % pref.prefix)
+                print("No match AddPrefix old " + str(pref))
             else:
                 print("wut?")
 
@@ -374,16 +391,18 @@ def compare_table(old_table, new_table):
         new_subprefixes.add(pref)
 
     total_prefixes += len(old_subprefixes)
-    symm_intersec = old_subprefixes ^ new_subprefixes
+    symm_intersec = list(old_subprefixes ^ new_subprefixes)
+    symm_intersec.sort(
+        key=operator.attrgetter('prefix', 'subchunk', 'addchunk'))
     failed_prefixes += len(symm_intersec)
     print("%d sub mismatches" % len(symm_intersec))
 
     if verbose:
         for pref in symm_intersec:
             if pref in new_subprefixes:
-                print("No match SubPrefix new %X" % pref.prefix)
-            elif pref in old_addprefixes:
-                print("No match SubPrefix old %X" % pref.prefix)
+                print("No match SubPrefix new " + str(pref))
+            elif pref in old_subprefixes:
+                print("No match SubPrefix old " + str(pref))
             else:
                 print("wut?")
 
