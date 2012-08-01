@@ -65,7 +65,7 @@ class SBHash:
 
 class SBData:
     def __init__(self):
-        # XXX: are sets usable for these 2?
+        self.name = None
         self.addchunks = set()
         self.subchunks = set()
         self.addprefixes = []
@@ -79,6 +79,9 @@ class SBData:
     def fill_addprefixes(self, prefixes):
         """Add prefixes are stored in the PrefixSet instead of in the sbstore,
         so allow filling them in seperately afterwards."""
+        assert len(prefixes) == len(self.addprefixes), \
+               "Prefixes: %d AddPrefixes: %d" \
+               % (len(prefixes), len(self.addprefixes))
         for i, pref in enumerate(self.addprefixes):
             pref.prefix = prefixes[i]
     def sort_all_data(self):
@@ -237,6 +240,9 @@ def read_pset(filename):
     for x in range(deltasize):
         index_deltas.append(readuint16(fp))
     prefixes = pset_to_prefixes(index_prefixes, index_starts, index_deltas)
+    # empty set has a special form
+    if len(prefixes) and prefixes[0] == 0:
+        prefixes = []
     return prefixes
 
 def parse_new_databases(dir):
@@ -249,6 +255,7 @@ def parse_new_databases(dir):
             print("Reading " + sb_name)
             sb_data = read_sbstore(sb_file)
             prefixes = read_pset(os.path.join(dir, sb_name + ".pset"))
+            sb_data.name = sb_name
             sb_data.fill_addprefixes(prefixes)
             sb_data.sort_all_data()
             sb_lists[sb_name] = sb_data
@@ -278,6 +285,7 @@ def parse_old_database(dir):
     for table_name in sb_names.keys():
         table_id = sb_names[table_name]
         data = SBData()
+        data.name = table_name
 
         # Gather add prefixes
         addpref_query = ("SELECT domain, partial_data, chunk_id "
@@ -328,29 +336,80 @@ def parse_old_database(dir):
     return sb_names
 
 def compare_table(old_table, new_table):
+    verbose = False
+
+    total_prefixes = 0
+    failed_prefixes = 0
+
     # Compare AddPrefixes
-    for i, pref in enumerate(old_table.addprefixes):
-        oldpref = pref.prefix
-        newpref = new_table.addprefixes[i].prefix
-        if oldpref != newpref:
-            print("No match old %X != new %X" % (oldpref, newpref))
-            exit(1)
-        else:
-            print(".", sep="", end="")
+    old_addprefixes = set()
+    for pref in old_table.addprefixes:
+        old_addprefixes.add(pref)
+
+    new_addprefixes = set()
+    for pref in new_table.addprefixes:
+        new_addprefixes.add(pref)
+
+    total_prefixes += len(old_addprefixes)
+    symm_intersec = old_addprefixes ^ new_addprefixes
+    failed_prefixes += len(symm_intersec)
+    print("%d add mismatches" % len(symm_intersec))
+
+    if verbose:
+        for pref in symm_intersec:
+            if pref in new_addprefixes:
+                print("No match AddPrefix new %X" % pref.prefix)
+            elif pref in old_addprefixes:
+                print("No match AddPrefix old %X" % pref.prefix)
+            else:
+                print("wut?")
+
+    # Compare SubPrefixes
+    old_subprefixes = set()
+    for pref in old_table.subprefixes:
+        old_subprefixes.add(pref)
+
+    new_subprefixes = set()
+    for pref in new_table.subprefixes:
+        new_subprefixes.add(pref)
+
+    total_prefixes += len(old_subprefixes)
+    symm_intersec = old_subprefixes ^ new_subprefixes
+    failed_prefixes += len(symm_intersec)
+    print("%d sub mismatches" % len(symm_intersec))
+
+    if verbose:
+        for pref in symm_intersec:
+            if pref in new_subprefixes:
+                print("No match SubPrefix new %X" % pref.prefix)
+            elif pref in old_addprefixes:
+                print("No match SubPrefix old %X" % pref.prefix)
+            else:
+                print("wut?")
+
+    print("Correct: %f%%"
+          % ((total_prefixes - failed_prefixes)*100/total_prefixes))
+    return failed_prefixes != 0
 
 def compare_all_the_things(new_lists, old_lists):
+    failure = False
     for table in old_lists:
         print("\nComparing table " + table)
         old_data = old_lists[table]
         new_data = new_lists[table]
-        compare_table(old_data, new_data)
+        failure |= compare_table(old_data, new_data)
+    return failure
 
 def main(argv):
     new_profile_dir = argv.pop()
     old_profile_dir = argv.pop()
     new_lists = parse_new_databases(new_profile_dir)
     old_lists = parse_old_database(old_profile_dir)
-    compare_all_the_things(new_lists, old_lists)
+    failure = compare_all_the_things(new_lists, old_lists)
+    if failure:
+        exit(1)
+    else:
+        exit(0)
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
