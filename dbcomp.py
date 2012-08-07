@@ -350,6 +350,43 @@ def parse_old_database(dir):
     connection.close()
     return sb_names
 
+def compare_chunks(old_table, new_table):
+    # Addchunks min/max, subchunks min/ax
+    old_set = [set(), set()]
+    new_set = [set(), set()]
+
+    for pref in old_table.addprefixes:
+        old_set[0].add(pref.addchunk)
+
+    for pref in old_table.subprefixes:
+        old_set[1].add(pref.subchunk)
+
+    for pref in new_table.addprefixes:
+        new_set[0].add(pref.addchunk)
+
+    for pref in new_table.subprefixes:
+        new_set[1].add(pref.subchunk)
+
+    if len(old_set[0]):
+        print("Old DB Add range: %d - %d" % (min(old_set[0]), max(old_set[0])))
+    if len(new_set[0]):
+        print("New DB Add range: %d - %d" % (min(new_set[0]), max(new_set[0])))
+        max_chunks = max(new_table.addchunks)
+        min_chunks = min(new_table.addchunks)
+        print("    DB Add range: %d - %d" % (min_chunks, max_chunks))
+
+    if len(old_set[1]):
+        print("Old DB Sub range: %d - %d" % (min(old_set[1]), max(old_set[1])))
+    if len(new_set[1]):
+        print("New DB Sub range: %d - %d" % (min(new_set[1]), max(new_set[1])))
+        max_chunks = max(new_table.subchunks)
+        min_chunks = min(new_table.subchunks)
+        print("    DB Sub range: %d - %d" % (min_chunks, max_chunks))
+
+    print("\n")
+
+    return False
+
 def compare_table(old_table, new_table):
     verbose = True
 
@@ -367,7 +404,7 @@ def compare_table(old_table, new_table):
 
     total_prefixes += len(old_addprefixes)
     symm_intersec = list(old_addprefixes ^ new_addprefixes)
-    symm_intersec.sort(key=operator.attrgetter('prefix', 'addchunk'))
+    symm_intersec.sort(key=operator.attrgetter('addchunk', 'prefix'))
 
     failed_prefixes += len(symm_intersec)
     print("%d add mismatches" % len(symm_intersec))
@@ -393,7 +430,7 @@ def compare_table(old_table, new_table):
     total_prefixes += len(old_subprefixes)
     symm_intersec = list(old_subprefixes ^ new_subprefixes)
     symm_intersec.sort(
-        key=operator.attrgetter('prefix', 'subchunk', 'addchunk'))
+        key=operator.attrgetter('subchunk', 'prefix', 'addchunk'))
     failed_prefixes += len(symm_intersec)
     print("%d sub mismatches" % len(symm_intersec))
 
@@ -416,6 +453,7 @@ def compare_all_the_things(new_lists, old_lists):
         print("\nComparing table " + table)
         old_data = old_lists[table]
         new_data = new_lists[table]
+        failure |= compare_chunks(old_data, new_data)
         failure |= compare_table(old_data, new_data)
     return failure
 
