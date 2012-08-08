@@ -80,6 +80,7 @@ class SBData:
     def __init__(self):
         self.name = None
         self.addchunks = set()
+        self.fake_add_chunks = set()
         self.subchunks = set()
         self.addprefixes = []
         self.subprefixes = []
@@ -383,7 +384,20 @@ def compare_chunks(old_table, new_table):
         min_chunks = min(new_table.subchunks)
         print("    DB Sub range: %d - %d" % (min_chunks, max_chunks))
 
-    print("\n")
+    # Intersect real sets and reported sets, for addchunks
+    # Reported sets should be a superset of real sets
+    print(end="\n")
+    reported = new_table.addchunks
+    if not reported >= new_set[0]:
+        print("Reported sets not a superset of real sets")
+    fake_set = reported - new_set[0]
+    fake_list = list(fake_set)
+    fake_list.sort()
+    for chunk in fake_list:
+        print("Fake set %d" % chunk)
+    new_table.fake_add_chunks.update(fake_set)
+
+    print(end="\n")
 
     return False
 
@@ -437,14 +451,22 @@ def compare_table(old_table, new_table):
     if verbose:
         for pref in symm_intersec:
             if pref in new_subprefixes:
-                print("No match SubPrefix new " + str(pref))
+                print("No match SubPrefix new " + str(pref), end="")
+                addchunk = pref.addchunk
+                if addchunk in new_table.addchunks:
+                    if addchunk in new_table.fake_add_chunks:
+                        print(", In FAKE Adds")
+                    else:
+                        print(", In Adds")
+                else:
+                    print(", Missing in Adds")
             elif pref in old_subprefixes:
                 print("No match SubPrefix old " + str(pref))
             else:
                 print("wut?")
 
     print("Correct: %f%%"
-          % ((total_prefixes - failed_prefixes)*100/total_prefixes))
+          % ((total_prefixes - failed_prefixes)*100.0/total_prefixes))
     return failed_prefixes != 0
 
 def compare_all_the_things(new_lists, old_lists):
